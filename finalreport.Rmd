@@ -1,0 +1,227 @@
+---
+title: "Analysis of the Movie lens dataset"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(caret)
+library(data.table)
+library(gridExtra)
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+
+set.seed(1) # sample.kind="Rounding")
+# if using R 3.5 or earlier, use `set.seed(1)` instead
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(lubridate)
+
+
+#function to calc the rmse for ratings
+
+RMSE<-function(actual,predicted){
+  sqrt(mean((actual-predicted)^2))
+}
+
+edx<-edx%>%mutate(day=day(as_datetime(timestamp)),week=week(as_datetime(timestamp)),month=month(as_datetime(timestamp)))
+
+```
+
+  ## Introduction
+
+The object of this analysis is to construct a model for a recommendation system using data given from the Movielens dataset.  The data consists of 6 variables from 10 million observations and each observation has the following characteristics:
+
+- **userId**: An integer value assigned to an individual user with a range of **1-71657**
+- **movieId**: A numeric value assigned to each movie with a range of **1-65133**
+
+
+- **rating**: A numeric value given by the user for a particular user ranging from **1-5** in **.5**           increments
+- **title**: A character variable encoding the movie title
+- **generes**: A character variable assigned to a movie that designates the genre to which the movie            belongs, there are **797** distinct genres
+- **timestamp**: The date and time at which the movie was reviewed
+
+Further, all movies in the dataset have at least one recorded review and each user in the dataset has reviewed at least one movie, all movies have a genre category assigned to it.
+
+Ninety percent of the data was used as a training set and used to train a simple linear model using penalized least squares estimates 
+
+
+## Analysis
+
+We will attempt to construct a linear model using root mean squared error as a metric.
+We chose an x-intercept for the linear equation that is equal to the average rating of all movies, and then verify it is the optimal choice by plotting it against the root mean square error on the training set.
+
+```{r fig1,fig.height=4,fig.width=5}
+mu<-mean(edx$rating)
+
+x<-data.frame(mean=seq(3.0,4.0,by=.1))
+y<-data.frame(RMSE=x%>%group_by(mean)%>%summarize(RMSE=RMSE(edx$rating,mean))%>%pull(RMSE))
+
+qplot(x$mean,y$RMSE,xlab="Mean movie rating",ylab="RMSE",main="Lowest RMSE occurs at mu of 3.51")
+
+
+
+
+
+
+
+```
+
+
+For the variable movieId, we can see that the majority of reviews are relatively small in number and stray from the mean in inverse proportion to the number of reviews 
+```{r fig.width=4,fig.height=3,fig.show="hold"}
+edx%>%group_by(movieId)%>%summarize(n=n())%>%.$n%>%quantile(probs=seq(0,1,.25))
+```
+```{r fig.width=4,fig.height=3,fig.show="hold",warning=FALSE,message=FALSE,error=FALSE}
+n<-edx%>%group_by(movieId)%>%summarize(n=n())
+plot(ecdf(sqrt(n$n)),xlab="Square root of number of reviews",ylab="Cumulative density",main="Distribution of number of movie reviews ")
+
+```
+Note that in general, as the number of movie reviews per movie increase, we see an increase in the movie rating.  Thus more popular movies tend to have a higher rating.
+```{r fig.width=4,fig.height=3,fig.show="hold",warning=FALSE,message=FALSE,error=FALSE}
+edx%>%group_by(movieId)%>%summarize(stars=mean(rating),n=n())%>%ggplot(aes(y=stars,x=n,))+geom_point()+geom_smooth(se=FALSE)+scale_x_sqrt()+geom_hline(yintercept =3.51,color="red")+ggtitle(label="Variaton of Movie rating vs number of reviews")+xlab("SQRT of Number of reviews per movie")+ylab("Rating in Stars")
+```
+
+For the userId variable, we see that the majority also consist of relatively small number of user reviews per user
+```{r fig.width=4,fig.height=3,fig.show="hold"}
+edx%>%group_by(userId)%>%summarize(n=n())%>%.$n%>%quantile(prob=seq(0,1,0.25))
+
+```
+
+```{r fig.width=4,fig.height=3,fig.show="hold"}
+n<-edx%>%group_by(userId)%>%summarize(n=n())
+plot(ecdf(sqrt(n$n)),xlab="Square root of number of reviews per user",ylab="Cumulative density",main="Distribution of user reviews ")
+
+```
+
+As the number of movie reviews per user increased we see the average movie rating drop below the mean.  Thus users who rate more movies tend to give below average ratings.
+
+=
+```{r fig.width=4,fig.height=3,fig.show="hold",warning=FALSE,message=FALSE,error=FALSE}
+
+edx%>%group_by(userId)%>%summarize(stars=mean(rating),n=n())%>%ggplot(aes(y=stars,x=n,))+geom_point()+geom_smooth(se=FALSE)+scale_x_sqrt()+geom_hline(yintercept =3.51,color="red")+ggtitle(label="Variaton of User rating vs number of reviews")+xlab("SQRT of Number of reviews per User")+ylab("Rating in Stars")
+
+```
+
+For the genres variable we see variation in genre membership as well as considerable variation in rating per category
+
+```{r fig.width=4,fig.height=3,fig.show="hold",warning=FALSE,message=FALSE,error=FALSE}
+
+
+edx%>%group_by(genres)%>%summarize(n=n())%>%ggplot(aes(n))+geom_histogram()+scale_x_log10()+ylab("Count")+xlab("Distribution of reviews per genre (log10 scale)")+ggtitle("Number of ratings per genre")+theme(axis.text.x = element_blank())
+
+edx%>%group_by(genres)%>%summarize(stars=mean(rating),n=n())%>%head(100)%>%ggplot(aes(x=seq(1,100),y=stars))+geom_line()+ggtitle("Average rating for a given genre (First 100)")+ylab("Stars")+xlab("Genres")+theme(axis.text.x=element_blank())
+```
+We see considerable variation in average rating per genre and the number of reviews per genre
+
+## Results:
+A simple linear model was constructed using the movieID,userID, and genre variables.
+The model was crosstrained and regularized with a lambda of *.4* selected, which give us a RMSE of *.8563* on the training data and a RMSE of *.8648* on the test data
+
+```{r fig.width=5,fig.height=4,warning=FALSE,message=FALSE,error=FALSE}
+lamb<-seq(0,1,.1)
+results<-sapply(lamb,function(lmb){
+  #for each iteration we take the movieset average rating
+  mu<-mean(edx$rating)
+  #now take the average of differences and divide by lambda
+  reg_movie_bias<-edx%>%group_by(movieId)%>%summarize(movie_bias=sum(rating-mu)/(n()+lmb))
+  
+  reg_user_bias<-edx%>%left_join(reg_movie_bias,by="movieId")%>%group_by(userId)%>%summarize(user_bias=sum(rating-mu-movie_bias)/(n()+lmb))
+  
+  genre_bias<-edx%>%left_join(reg_movie_bias,by="movieId")%>%left_join(reg_user_bias,by="userId")%>%group_by(genres)%>%summarize(gbias=sum(rating-mu-movie_bias-user_bias)/(n()+lmb))
+  
+  predicted_ratings_training<-edx%>%left_join(reg_movie_bias,by="movieId")%>%left_join(reg_user_bias,by="userId")%>%left_join(genre_bias,by="genres")%>%mutate(pred=mu+movie_bias+user_bias+gbias)%>%pull(pred)
+  
+  RMSE(edx$rating,predicted_ratings_training)
+
+})
+
+data.frame(lamb,results)%>%ggplot(aes(x=lamb,y=results))+geom_point()+ylab("Training set error")+xlab("Lambda")
+
+
+
+
+```
+```{r fig.width=5,fig.height=4,warning=FALSE,message=FALSE,error=FALSE}
+reg_movie_bias<-edx%>%group_by(movieId)%>%summarize(movie_bias=sum(rating-mu)/(n()+4))
+reg_user_bias<-edx%>%left_join(reg_movie_bias,by="movieId")%>%group_by(userId)%>%summarize(user_bias=sum(rating-mu-movie_bias)/(n()+4))
+reg_genre_bias<-edx%>%left_join(reg_movie_bias,by="movieId")%>%left_join(reg_user_bias,by="userId")%>%group_by(genres)%>%summarize(gbias=sum(rating-mu-movie_bias-user_bias)/(n()+4))
+
+predicted_ratings_training<-edx%>%left_join(reg_movie_bias,by="movieId")%>%left_join(reg_user_bias,by="userId")%>%left_join(reg_genre_bias,by="genres")%>%mutate(pred=mu+movie_bias+user_bias+gbias)%>%pull(pred)
+
+edx<-edx%>%mutate(predicted=predicted_ratings_training,error=rating-predicted_ratings_training)
+
+predicted_ratings<-validation%>%left_join(reg_movie_bias,by="movieId")%>%left_join(reg_user_bias,by="userId")%>%left_join(reg_genre_bias,by="genres")%>%mutate(pred=mu+movie_bias+user_bias+gbias)%>%pull(pred)
+```
+Validation set error:
+```{r fig.width=5,fig.height=4,warning=FALSE,message=FALSE,error=FALSE}
+RMSE(validation$rating,predicted_ratings)
+```
+## Conclusions:
+
+As expected, the model performed with less accuracy on movies with a lower number of reviews despite the normalization.  There was generally less error across the userid variable and across the genre variable, indicating that there may be some movie to movie interaction not accounted for in this model.  Further study and modeling to account for this effect will be necessary.
+
+The day, week variable extracted from the timestamp variable did not correlate well with the rating variable and did not contribute significantly to our RMSE and were not included in the model.
+
+```{r fig.width=5,fig.height=4,warning=FALSE,message=FALSE,error=FALSE}
+edx%>%group_by(movieId)%>%summarize(number=n(),error=mean(error))%>%ggplot(aes(x=number,y=error))+geom_point()+scale_x_log10()+xlab("Log number of ratings")
+
+
+```
+
+
+
+
+```{r fig.width=5,fig.height=4,warning=FALSE,message=FALSE,error=FALSE}
+edx%>%group_by(userId)%>%summarize(number=n(),error=mean(error))%>%ggplot(aes(x=number,y=error))+geom_point()+scale_x_log10()+xlab("Log number of user ratings")
+```
+
+Top ten error by genre:
+```{r fig.width=5,fig.height=4,warning=FALSE,message=FALSE,error=FALSE}
+edx%>%group_by(genres)%>%summarise(n=n(),error=mean(error))%>%arrange(desc(abs(error)))%>%head(10)
+```
+
+Correlations of day and week and month vs rating
+```{r fig.width=5,fig.height=4,warning=FALSE,message=FALSE,error=FALSE}
+cor(edx$day,edx$rating)
+cor(edx$week,edx$rating)
+cor(edx$month,edx$rating)
+```
